@@ -1,6 +1,7 @@
 FROM golang:1.16.6-stretch
 LABEL maintainer="openark@github.com"
 
+RUN echo "deb http://archive.debian.org/debian stretch main" > /etc/apt/sources.list
 RUN apt-get update -q -y
 RUN apt-get install -y sudo haproxy python git jq rsync libaio1 libnuma1 mysql-client bsdmainutils less vim
 
