@@ -1,7 +1,9 @@
 FROM golang:1.16.6-stretch
 LABEL maintainer="openark@github.com"
 
+RUN echo "deb http://archive.debian.org/debian stretch main" > /etc/apt/sources.list
 RUN apt-get update -q -y
+RUN apt-get install -y --allow-downgrades libsqlite3-0=3.16.2-5+deb9u1
 RUN apt-get install -y sudo lsb-release rsync libaio1 numactl sqlite3 git jq less vim python bsdmainutils
 
 COPY docker/resources/systemctl.py /usr/bin/systemctl
