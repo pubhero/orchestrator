@@ -5,7 +5,7 @@
 #   dock test:                build orchestrator & run unit and integration tests
 #   dock alpine:              build and run orchestrator on alpine linux
 #   dock hub:                 build hub.docker.com image with latest tag
-#   dock pkg [target-path]:   build orchestrator release packages and copy to target path (default path: /tmp/orchestrator-release)
+#   dock pkg [target-path]:   build orchestrator release packages and copy to target path (default path: /tmp/orchestrator-release | on windows: ~/.orchestrator-release )
 #   dock system:              create and run a system test environment
 #   dock raft:                build and run orchestrator in a 3-node raft setup
 
@@ -31,7 +31,19 @@ case "$command" in
   "pkg")
     packages_path="${2:-/tmp/orchestrator-release}"
     docker_target="orchestrator-packaging"
-    docker build . -f docker/Dockerfile.packaging -t "${docker_target}" && docker run --rm -it -v "${packages_path}:/tmp/pkg" "${docker_target}:latest" bash -c 'find /tmp/orchestrator-release/ -maxdepth 1 -type f | xargs cp -t /tmp/pkg'
+    if [ -n "$MSYSTEM" ] && [[ "$MSYSTEM" == MINGW* ]]; then
+      echo "Detected Git Bash on Windows, enforce fixed packages path..."
+      if [[ "$packages_path" == "/tmp/"* ]]; then
+        # On Windows replace "/tmp/" with "$HOME/." for example:
+        # "/tmp/orchestrator-release" => "/c/Users/Username/.orchestrator-release"
+        packages_path="${packages_path//\/tmp\//$HOME\/.}"
+      fi
+      volume_path="/${packages_path}"
+    else
+      volume_path="${packages_path}"
+    fi
+    rm -f "${packages_path}/orchestrator"{*.deb,*.rpm,*.gz} &>/dev/null || true
+    docker build . -f docker/Dockerfile.packaging -t "${docker_target}" && docker run --rm -it -v "${volume_path}:/tmp/pkg" "${docker_target}:latest" bash -c 'find /tmp/orchestrator-release/ -maxdepth 1 -type f | xargs cp -t /tmp/pkg'
     echo "packages generated on ${packages_path}:"
     ls -l "${packages_path}"
     ;;
