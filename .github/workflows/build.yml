@@ -1,0 +1,128 @@
+name: Build
+
+on: push
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      #
+      # BUILD BINARY AND UPLOAD ARTIFACT TO WORKFLOW
+      #
+
+      - name: Set up Go 1.16
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.16
+
+      - name: Test source code
+        run: script/test-source
+
+      - name: Test build
+        run: script/test-build
+
+      - name: Test unit
+        run: script/test-unit
+
+      - name: Update packages
+        run: sudo apt-get update
+
+      - name: Set up SQLite
+        run: sudo apt-get install sqlite3
+
+      - name: Start local MySQL
+        run: sudo /etc/init.d/mysql start
+
+      - name: Test integration
+        run: script/test-integration
+
+      - name: Test documentation
+        run: script/test-docs
+
+      - name: Upload orchestrator binary artifact
+        uses: actions/upload-artifact@v1
+        with:
+          name: orchestrator
+          path: bin/orchestrator
+        if: ${{ !contains(github.event.head_commit.message, '[NOCI]') }}
+
+      #
+      # BUILD PACKAGES AND UPLOAD PACKAGES AND BINARY ARTIFACTS TO DRAFT
+      #
+
+      # Set workflow variables
+      - name: Set workflow variables
+        id: variables
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "release=${GITHUB_REF#refs/*/}" >> $GITHUB_OUTPUT
+          APP_VERSION=$(cat RELEASE_VERSION)          
+          echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          newestrelease=$(gh release list --limit 1)
+          if [ -n "$newestrelease" ]; then
+            newestrelease_type=$(echo "$newestrelease" | awk '{print $2}' | tr '[:upper:]' '[:lower:]')
+            newestrelease_tag=$(echo "$newestrelease" | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
+            if [ "$newestrelease_type" == "draft" ] && ( [ "$newestrelease_tag" == "$APP_VERSION-draft" ] || [ "$newestrelease_tag" == "v$APP_VERSION-draft" ] ); then
+              echo "draft_exists=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "draft_exists=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "draft_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+        shell: bash
+
+      # If no draft exists and no draft creation is triggered then there is no need to build packages
+      - name: Exit build if no draft exists and no draft creation triggered
+        run: exit 1
+        shell: bash
+        if: ${{ steps.variables.outputs.draft_exists == 'false' && !contains(github.event.head_commit.message, '[DRAFT]') }}
+
+      # Build orchestrator packaging image (that builds and holds release packages)
+      - name: Build orchestrator packaging image
+        run: docker build . -f docker/Dockerfile.packaging -t "orchestrator-packaging:latest"
+
+      # Run orchestrator packaging image that holds freshly built release packages
+      # Mount directory with the built packages to the GitHub Actions runner, thus
+      # artifacts are accessible in /tmp/orchestrator-release/* within the runner.
+      - name: Run orchestrator packaging image
+        uses: addnab/docker-run-action@v3
+        with:
+          options: -v /tmp/orchestrator-release:/tmp/pkg
+          image: orchestrator-packaging:latest
+          run: bash -c 'find /tmp/orchestrator-release/ -maxdepth 1 -type f | xargs cp -t /tmp/pkg'
+
+      # - name: Check contents
+      #   run: ls -la /tmp/orchestrator-release
+
+      # Create draft (if not exist) and upload artifacts
+      - name: Create draft and upload artifacts
+        uses: ncipollo/release-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: "${{ steps.variables.outputs.version }}-draft"
+          name: "${{ steps.variables.outputs.version }}"
+          skipIfReleaseExists: true
+          updateOnlyUnreleased: true
+          artifacts: /tmp/orchestrator-release/*,bin/orchestrator
+          draft: true
+          allowUpdates: true
+          replacesArtifacts: true
+          prerelease: true
+        if: ${{ contains(github.event.head_commit.message, '[DRAFT]') }}
+
+      # Upload updated artifacts to existing draft
+      - name: "Upload updated artifacts to existing draft ${{ steps.variables.outputs.version }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload --clobber "${{ steps.variables.outputs.version }}-draft" /tmp/orchestrator-release/* bin/orchestrator
+        if: ${{ !contains(github.event.head_commit.message, '[NOCI]') && !contains(github.event.head_commit.message, '[DRAFT]') }}
